@@ -23,11 +23,14 @@ const int HIGH_THRESHOLD = 532;      // Threshold for detecting HIGH (512 + 20)
 const int LOW_THRESHOLD = 492;       // Threshold for detecting LOW (512 - 20)
 const unsigned long MIN_PULSE_WIDTH = 70;   // Minimum valid pulse width (ms)
 const unsigned long MAX_PULSE_WIDTH = 1000; // Maximum valid pulse width (ms)
+const unsigned long DEBOUNCE_TIME = 10;     // Debounce time in ms to prevent contact bounce
 
 // Variables
 int currentValue = 0;
 bool currentState = false;           // false = LOW, true = HIGH
 bool previousState = false;
+bool stableState = false;            // Debounced stable state
+unsigned long lastStateChangeTime = 0; // Time of last state change (for debouncing)
 unsigned long pulseStartTime = 0;    // Time when pulse started
 unsigned long pulseEndTime = 0;      // Time when pulse ended
 unsigned long pulseDuration = 0;     // Duration of last pulse
@@ -55,11 +58,14 @@ void setup() {
   // Initial reading
   currentValue = analogRead(ANALOG_PIN);
   previousState = (currentValue > HIGH_THRESHOLD);
+  stableState = previousState;
+  lastStateChangeTime = millis();
 
   // Print header
   Serial.println("AC Pulse Counter - Variable Pulse Width");
   Serial.println("========================================");
   Serial.println("Valid pulse range: 70ms to 1000ms");
+  Serial.println("Debounce time: 10ms (contact bounce protection)");
   Serial.println("========================================");
   Serial.println();
   Serial.println("Monitoring pulses...");
@@ -84,49 +90,61 @@ void loop() {
     }
     // If between thresholds, keep previous state (hysteresis)
 
-    // Detect state changes (rising and falling edges)
+    // Debouncing: detect raw state changes
     if (currentState != previousState) {
-      if (currentState == true) {
-        // Rising edge - pulse started
-        pulseStartTime = currentTime;
-      } else {
-        // Falling edge - pulse ended
-        pulseEndTime = currentTime;
-        pulseDuration = pulseEndTime - pulseStartTime;
-
-        // Validate pulse duration
-        if (pulseDuration >= MIN_PULSE_WIDTH && pulseDuration <= MAX_PULSE_WIDTH) {
-          // Valid pulse
-          totalPulseCount++;
-          lastPulseDuration = pulseDuration;
-
-          // Update min/max statistics
-          if (minPulseDuration == 0 || pulseDuration < minPulseDuration) {
-            minPulseDuration = pulseDuration;
-          }
-          if (pulseDuration > maxPulseDuration) {
-            maxPulseDuration = pulseDuration;
-          }
-
-          // Print individual pulse info
-          Serial.print("Pulse #");
-          Serial.print(totalPulseCount);
-          Serial.print(" - Duration: ");
-          Serial.print(pulseDuration);
-          Serial.println(" ms");
-        } else {
-          // Invalid pulse (outside range)
-          invalidPulseCount++;
-          Serial.print("Invalid pulse detected: ");
-          Serial.print(pulseDuration);
-          Serial.print(" ms (outside ");
-          Serial.print(MIN_PULSE_WIDTH);
-          Serial.print("-");
-          Serial.print(MAX_PULSE_WIDTH);
-          Serial.println(" ms range)");
-        }
-      }
+      // State changed - start debounce timer
+      lastStateChangeTime = currentTime;
       previousState = currentState;
+    }
+
+    // Check if state has been stable for debounce period
+    if (currentTime - lastStateChangeTime >= DEBOUNCE_TIME) {
+      // State is stable, check if it's different from our accepted stable state
+      if (currentState != stableState) {
+        // Stable state transition confirmed
+        if (currentState == true) {
+          // Rising edge - pulse started
+          pulseStartTime = currentTime;
+        } else {
+          // Falling edge - pulse ended
+          pulseEndTime = currentTime;
+          pulseDuration = pulseEndTime - pulseStartTime;
+
+          // Validate pulse duration
+          if (pulseDuration >= MIN_PULSE_WIDTH && pulseDuration <= MAX_PULSE_WIDTH) {
+            // Valid pulse
+            totalPulseCount++;
+            lastPulseDuration = pulseDuration;
+
+            // Update min/max statistics
+            if (minPulseDuration == 0 || pulseDuration < minPulseDuration) {
+              minPulseDuration = pulseDuration;
+            }
+            if (pulseDuration > maxPulseDuration) {
+              maxPulseDuration = pulseDuration;
+            }
+
+            // Print individual pulse info
+            Serial.print("Pulse #");
+            Serial.print(totalPulseCount);
+            Serial.print(" - Duration: ");
+            Serial.print(pulseDuration);
+            Serial.println(" ms");
+          } else {
+            // Invalid pulse (outside range)
+            invalidPulseCount++;
+            Serial.print("Invalid pulse detected: ");
+            Serial.print(pulseDuration);
+            Serial.print(" ms (outside ");
+            Serial.print(MIN_PULSE_WIDTH);
+            Serial.print("-");
+            Serial.print(MAX_PULSE_WIDTH);
+            Serial.println(" ms range)");
+          }
+        }
+        // Update stable state
+        stableState = currentState;
+      }
     }
   }
 
@@ -173,10 +191,16 @@ void loop() {
  *   - Last, min, and max pulse durations
  *   - Average pulse rate (pulses/second)
  *
+ * CONTACT BOUNCE PROTECTION:
+ * - 10ms debounce time prevents mechanical contact bounce from creating false counts
+ * - State must be stable for 10ms before being accepted as a valid transition
+ * - Adjust DEBOUNCE_TIME if needed (5-20ms typical for mechanical contacts)
+ *
  * TROUBLESHOOTING:
  * - If count is 0: Check signal connection and amplitude
  * - If many invalid pulses: Adjust MIN_PULSE_WIDTH and MAX_PULSE_WIDTH
- * - If erratic detection: Adjust HIGH_THRESHOLD and LOW_THRESHOLD
+ * - If erratic detection: Adjust HIGH_THRESHOLD and LOW_THRESHOLD, or increase DEBOUNCE_TIME
  * - If missing pulses: Check that signal swings above/below thresholds
+ * - If counting multiple pulses for one contact: Increase DEBOUNCE_TIME
  * - Adjust thresholds based on your actual signal levels (use Serial Plotter)
  */

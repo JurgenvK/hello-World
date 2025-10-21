@@ -1,8 +1,10 @@
 /*
- * AC Pulse Counter for 50Hz Signal
+ * AC Pulse Counter with Variable Pulse Width Detection
  *
- * This program counts pulses from a 50Hz AC signal connected to an analog input.
- * It detects zero-crossings and counts them over 100ms intervals.
+ * This program detects and counts pulses from an AC signal on an analog input.
+ * It measures individual pulse durations and counts pulses in the valid range.
+ *
+ * Valid pulse range: 70ms to 1000ms
  *
  * HARDWARE SETUP:
  * - Connect AC signal through appropriate voltage divider and protection circuit
@@ -16,18 +18,28 @@
 // Configuration
 const int ANALOG_PIN = A0;           // Analog input pin
 const int SAMPLE_INTERVAL = 1;       // Sample every 1ms
-const int COUNT_PERIOD = 100;        // Count period in milliseconds
-const int ZERO_THRESHOLD = 512;      // Threshold for zero crossing (midpoint of 0-1023)
-const int HYSTERESIS = 20;           // Hysteresis to prevent noise triggering
+const int REPORT_PERIOD = 5000;      // Report statistics every 5 seconds
+const int HIGH_THRESHOLD = 532;      // Threshold for detecting HIGH (512 + 20)
+const int LOW_THRESHOLD = 492;       // Threshold for detecting LOW (512 - 20)
+const unsigned long MIN_PULSE_WIDTH = 70;   // Minimum valid pulse width (ms)
+const unsigned long MAX_PULSE_WIDTH = 1000; // Maximum valid pulse width (ms)
 
 // Variables
 int currentValue = 0;
-int previousValue = 0;
-bool currentState = false;           // false = below threshold, true = above threshold
+bool currentState = false;           // false = LOW, true = HIGH
 bool previousState = false;
-unsigned long lastCountTime = 0;
+unsigned long pulseStartTime = 0;    // Time when pulse started
+unsigned long pulseEndTime = 0;      // Time when pulse ended
+unsigned long pulseDuration = 0;     // Duration of last pulse
+unsigned long lastReportTime = 0;
 unsigned long lastSampleTime = 0;
-int pulseCount = 0;
+
+// Statistics
+unsigned long totalPulseCount = 0;   // Total valid pulses counted
+unsigned long invalidPulseCount = 0; // Pulses outside valid range
+unsigned long lastPulseDuration = 0; // Most recent pulse duration
+unsigned long minPulseDuration = 0;  // Shortest pulse seen
+unsigned long maxPulseDuration = 0;  // Longest pulse seen
 
 void setup() {
   // Initialize serial communication
@@ -37,18 +49,21 @@ void setup() {
   pinMode(ANALOG_PIN, INPUT);
 
   // Initialize timing
-  lastCountTime = millis();
+  lastReportTime = millis();
   lastSampleTime = millis();
 
   // Initial reading
-  previousValue = analogRead(ANALOG_PIN);
-  previousState = (previousValue > ZERO_THRESHOLD);
+  currentValue = analogRead(ANALOG_PIN);
+  previousState = (currentValue > HIGH_THRESHOLD);
 
   // Print header
-  Serial.println("AC Pulse Counter - 50Hz Signal");
-  Serial.println("================================");
-  Serial.println("Time(ms)\tPulses\tFrequency(Hz)");
-  Serial.println("================================");
+  Serial.println("AC Pulse Counter - Variable Pulse Width");
+  Serial.println("========================================");
+  Serial.println("Valid pulse range: 70ms to 1000ms");
+  Serial.println("========================================");
+  Serial.println();
+  Serial.println("Monitoring pulses...");
+  Serial.println();
 }
 
 void loop() {
@@ -62,52 +77,106 @@ void loop() {
     currentValue = analogRead(ANALOG_PIN);
 
     // Determine current state with hysteresis
-    if (currentValue > (ZERO_THRESHOLD + HYSTERESIS)) {
+    if (currentValue > HIGH_THRESHOLD) {
       currentState = true;
-    } else if (currentValue < (ZERO_THRESHOLD - HYSTERESIS)) {
+    } else if (currentValue < LOW_THRESHOLD) {
       currentState = false;
     }
     // If between thresholds, keep previous state (hysteresis)
 
-    // Detect state change (zero crossing)
+    // Detect state changes (rising and falling edges)
     if (currentState != previousState) {
-      pulseCount++;
+      if (currentState == true) {
+        // Rising edge - pulse started
+        pulseStartTime = currentTime;
+      } else {
+        // Falling edge - pulse ended
+        pulseEndTime = currentTime;
+        pulseDuration = pulseEndTime - pulseStartTime;
+
+        // Validate pulse duration
+        if (pulseDuration >= MIN_PULSE_WIDTH && pulseDuration <= MAX_PULSE_WIDTH) {
+          // Valid pulse
+          totalPulseCount++;
+          lastPulseDuration = pulseDuration;
+
+          // Update min/max statistics
+          if (minPulseDuration == 0 || pulseDuration < minPulseDuration) {
+            minPulseDuration = pulseDuration;
+          }
+          if (pulseDuration > maxPulseDuration) {
+            maxPulseDuration = pulseDuration;
+          }
+
+          // Print individual pulse info
+          Serial.print("Pulse #");
+          Serial.print(totalPulseCount);
+          Serial.print(" - Duration: ");
+          Serial.print(pulseDuration);
+          Serial.println(" ms");
+        } else {
+          // Invalid pulse (outside range)
+          invalidPulseCount++;
+          Serial.print("Invalid pulse detected: ");
+          Serial.print(pulseDuration);
+          Serial.print(" ms (outside ");
+          Serial.print(MIN_PULSE_WIDTH);
+          Serial.print("-");
+          Serial.print(MAX_PULSE_WIDTH);
+          Serial.println(" ms range)");
+        }
+      }
       previousState = currentState;
     }
-
-    previousValue = currentValue;
   }
 
-  // Report counts every COUNT_PERIOD milliseconds
-  if (currentTime - lastCountTime >= COUNT_PERIOD) {
-    // Calculate frequency from pulse count
-    // Each complete AC cycle has 2 zero crossings (positive and negative)
-    // Frequency = (pulseCount / 2) / (COUNT_PERIOD / 1000)
-    float frequency = (pulseCount / 2.0) / (COUNT_PERIOD / 1000.0);
+  // Report statistics periodically
+  if (currentTime - lastReportTime >= REPORT_PERIOD) {
+    Serial.println();
+    Serial.println("========== STATISTICS ==========");
+    Serial.print("Total valid pulses: ");
+    Serial.println(totalPulseCount);
+    Serial.print("Invalid pulses: ");
+    Serial.println(invalidPulseCount);
 
-    // Print results
-    Serial.print(currentTime);
-    Serial.print("\t\t");
-    Serial.print(pulseCount);
-    Serial.print("\t");
-    Serial.print(frequency, 1);
-    Serial.println(" Hz");
+    if (totalPulseCount > 0) {
+      Serial.print("Last pulse duration: ");
+      Serial.print(lastPulseDuration);
+      Serial.println(" ms");
+      Serial.print("Min pulse duration: ");
+      Serial.print(minPulseDuration);
+      Serial.println(" ms");
+      Serial.print("Max pulse duration: ");
+      Serial.print(maxPulseDuration);
+      Serial.println(" ms");
 
-    // Reset for next counting period
-    pulseCount = 0;
-    lastCountTime = currentTime;
+      // Calculate average pulse rate
+      float pulsesPerSecond = (float)totalPulseCount / ((currentTime - 0) / 1000.0);
+      Serial.print("Average pulse rate: ");
+      Serial.print(pulsesPerSecond, 2);
+      Serial.println(" pulses/sec");
+    }
+    Serial.println("================================");
+    Serial.println();
+
+    lastReportTime = currentTime;
   }
 }
 
 /*
  * EXPECTED OUTPUT:
- * For a 50Hz AC signal, you should see:
- * - Approximately 10 pulses per 100ms (5 complete cycles × 2 crossings per cycle)
- * - Frequency reading around 50 Hz
+ * - Individual pulse notifications showing pulse number and duration
+ * - Warnings for pulses outside the 70-1000ms valid range
+ * - Statistics report every 5 seconds showing:
+ *   - Total valid pulses counted
+ *   - Invalid pulse count
+ *   - Last, min, and max pulse durations
+ *   - Average pulse rate (pulses/second)
  *
  * TROUBLESHOOTING:
  * - If count is 0: Check signal connection and amplitude
- * - If count is erratic: Adjust HYSTERESIS value or check for noise
- * - If frequency is double: Signal may have DC offset, adjust ZERO_THRESHOLD
- * - If frequency is half: Only detecting one edge, check signal amplitude
+ * - If many invalid pulses: Adjust MIN_PULSE_WIDTH and MAX_PULSE_WIDTH
+ * - If erratic detection: Adjust HIGH_THRESHOLD and LOW_THRESHOLD
+ * - If missing pulses: Check that signal swings above/below thresholds
+ * - Adjust thresholds based on your actual signal levels (use Serial Plotter)
  */
